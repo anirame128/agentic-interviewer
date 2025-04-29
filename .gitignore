@@ -61,3 +61,30 @@ logs/
 .cache/
 .temp/
 .tmp/
+
+# ignore any .next folder (even nested)
+**/.next/
+/**/.next/**
+
+# ignore any out/dist folders (even nested)
+**/out/
+/**/out/**
+**/dist/
+/**/dist/**
+
+# ignore Turbopack cache/runtime
+**/.turbo/
+/**/.turbo/**
+/.turbopack
+.turbopack-*
+
+# catch all the various Next build manifest files
+**/build-manifest*.json
+**/app-build-manifest*.json
+**/fallback-build-manifest*.json
+**/middleware-manifest*.json
+**/middleware-build-manifest*.json
+**/interception-route-rewrite-manifests.json
+
+# map files that come from those builds
+**/*.js.map

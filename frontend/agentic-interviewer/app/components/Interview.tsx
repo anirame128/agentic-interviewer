@@ -2,10 +2,9 @@
 
 import { useEffect, useRef, useState } from 'react';
 import io from 'socket.io-client';
-import Editor from '@monaco-editor/react';
 
 interface LogEntry {
-  who: string;
+  who: 'bot' | 'you';
   txt: string;
 }
 
@@ -19,10 +18,10 @@ export default function Interview() {
   
   const [log, setLog] = useState<LogEntry[]>([]);
   const [recording, setRecording] = useState(false);
-  const [timeLeft, setTimeLeft] = useState(60 * 45);
   const mediaRecorder = useRef<MediaRecorder | null>(null);
+  const chunks = useRef<Blob[]>([]);
+  const audioStream = useRef<MediaStream | null>(null);
   const socketInitialized = useRef(false);
-  const timerRef = useRef<NodeJS.Timeout | undefined>(undefined);
 
   // Socket connection effect
   useEffect(() => {
@@ -38,12 +37,12 @@ export default function Interview() {
 
       socket.on('botText', (txt: string) => {
         console.log('[Frontend] ← Received bot text:', txt);
-        appendLog({ who:'bot', txt });
+        setLog(prev => [...prev, { who:'bot', txt }]);
       });
 
       socket.on('userText', (txt: string) => {
         console.log('[Frontend] ← Received user text:', txt);
-        appendLog({ who:'you', txt });
+        setLog(prev => [...prev, { who:'you', txt }]);
       });
 
       socket.on('botAudio', (base64: string) => {
@@ -51,88 +50,73 @@ export default function Interview() {
         playAudio(base64);
       });
 
-      socket.on('error', (err) => {
-        console.error('[Frontend] Socket error:', err);
-      });
-
-      socket.on('timeUp', () => {
-        console.log('[Frontend] Time is up!');
-        if (recording) {
-          onStopClick();
-        }
-        alert('Time is up! The interview has ended.');
+      socket.on('error', (msg: string) => {
+        console.error('[Frontend] Socket error:', msg);
+        alert(msg);
+        if (recording) onStopClick();
       });
     }
 
     return () => {
       console.log('[Frontend] Socket effect cleanup');
-    };
-  }, [recording]);
-
-  // Timer effect
-  useEffect(() => {
-    if (recording && timeLeft > 0) {
-      timerRef.current = setInterval(() => {
-        setTimeLeft(prev => {
-          if (prev <= 1) {
-            clearInterval(timerRef.current);
-            socket.emit('timeUp');
-            return 0;
-          }
-          return prev - 1;
-        });
-      }, 1000);
-    }
-
-    return () => {
-      if (timerRef.current) {
-        clearInterval(timerRef.current);
+      if (audioStream.current) {
+        audioStream.current.getTracks().forEach(track => track.stop());
       }
     };
-  }, [recording, timeLeft]);
+  }, []);
 
   const startInterview = async () => {
     console.log('[Frontend] → startInterview() called');
     try {
       console.log('[Frontend] Requesting microphone access...');
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      console.log('[Frontend] Microphone access granted');
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+        }
+      });
+      console.log('[Frontend] Microphone access granted with echo cancellation and noise suppression');
+      audioStream.current = stream;
       
       mediaRecorder.current = new MediaRecorder(stream, { mimeType:'audio/webm' });
       console.log('[Frontend] MediaRecorder created');
       
-      mediaRecorder.current.ondataavailable = async (e: BlobEvent) => {
+      // Reset chunks array
+      chunks.current = [];
+      
+      mediaRecorder.current.ondataavailable = (e: BlobEvent) => {
         if (e.data.size > 0) {
-          const base64 = await blobToBase64(e.data);
-          console.log('[Frontend] Sending audio chunk to server');
-          socket.emit('audioChunk', { audioBase64: base64 });
+          console.log('[Frontend] Adding chunk of size:', e.data.size);
+          chunks.current.push(e.data);
         }
       };
       
-      mediaRecorder.current.onstop = () => {
-        console.log('[Frontend] MediaRecorder stopped');
+      mediaRecorder.current.onstop = async () => {
+        console.log('[Frontend] MediaRecorder stopped, sending complete audio');
+        // Build one complete WebM file from all chunks
+        const blob = new Blob(chunks.current, { type: 'audio/webm' });
+        chunks.current = []; // Clear chunks array
+        const base64 = await blobToBase64(blob);
+        console.log('[Frontend] Sending complete audio blob, size:', blob.size);
+        socket.emit('audioBlob', { audioBase64: base64 });
       };
       
       console.log('[Frontend] Starting MediaRecorder');
-      mediaRecorder.current.start(1000);
+      mediaRecorder.current.start();
       
       console.log('[Frontend] Setting recording state to true');
       setRecording(true);
       
-      console.log('[Frontend] → Emitting startInterview with duration:', timeLeft/60);
-      socket.emit('startInterview', { durationMinutes: timeLeft/60 });
+      console.log('[Frontend] → Emitting startInterview');
+      socket.emit('startInterview');
     } catch (error) {
       console.error('[Frontend] Error in startInterview:', error);
     }
   };
 
-  function appendLog(entry: LogEntry) {
-    setLog(l => [...l, entry]);
-  }
-
   function playAudio(b64: string) {
     console.log('[Frontend] Creating audio element');
-    const audio = new Audio('data:audio/wav;base64,' + b64);
+    const audio = new Audio('data:audio/mp3;base64,' + b64);
     
     audio.onerror = (e) => {
       console.error('[Frontend] Audio element error:', e);
@@ -152,17 +136,25 @@ export default function Interview() {
     };
   }
 
-  function onStopClick() {
+  const onStopClick = () => {
     console.log('[Frontend] Stop button clicked');
     if (mediaRecorder.current) {
       mediaRecorder.current.stop();
     }
-    setRecording(false);
-    socket.emit('stopInterview');
-    if (timerRef.current) {
-      clearInterval(timerRef.current);
+    if (audioStream.current) {
+      audioStream.current.getTracks().forEach(track => track.stop());
     }
-  }
+    setRecording(false);
+  };
+
+  const sendResponse = () => {
+    console.log('[Frontend] Send Response button clicked');
+    if (mediaRecorder.current) {
+      mediaRecorder.current.stop();
+      // Restart recording immediately
+      mediaRecorder.current.start();
+    }
+  };
 
   function blobToBase64(blob: Blob): Promise<string> {
     return new Promise(res => {
@@ -173,87 +165,61 @@ export default function Interview() {
   }
 
   return (
-    <div style={{ padding:20 }}>
-      <h1>AI Mock Interview</h1>
-      <div>
+    <div className="p-5">
+      <h1 className="text-2xl font-bold mb-4">AI Mock Interview</h1>
+      <div className="flex items-center gap-4">
         <button 
           type="button"
           onClick={startInterview}
           disabled={recording}
-          style={{
-            padding: '10px 20px',
-            fontSize: '16px',
-            cursor: recording ? 'not-allowed' : 'pointer',
-            backgroundColor: recording ? '#ccc' : '#0070f3',
-            color: 'white',
-            border: 'none',
-            borderRadius: '4px'
-          }}
+          className={`
+            px-4 py-2 rounded-md text-white font-medium
+            ${recording 
+              ? 'bg-gray-400 cursor-not-allowed' 
+              : 'bg-blue-600 hover:bg-blue-700 cursor-pointer'
+            }
+          `}
         >
-          {recording ? 'Interview in Progress...' : 'Start Interview (45m)'}
+          {recording ? 'Interview in Progress...' : 'Start Interview'}
         </button>
         {recording && (
-          <button 
-            type="button"
-            onClick={onStopClick}
-            style={{
-              marginLeft: '10px',
-              padding: '10px 20px',
-              fontSize: '16px',
-              cursor: 'pointer',
-              backgroundColor: '#dc3545',
-              color: 'white',
-              border: 'none',
-              borderRadius: '4px'
-            }}
-          >
-            Stop Interview
-          </button>
+          <>
+            <button 
+              type="button"
+              onClick={sendResponse}
+              className="px-4 py-2 rounded-md text-white font-medium bg-green-600 hover:bg-green-700"
+            >
+              Send Response
+            </button>
+            <button 
+              type="button"
+              onClick={onStopClick}
+              className="px-4 py-2 rounded-md text-white font-medium bg-red-600 hover:bg-red-700"
+            >
+              Stop & End
+            </button>
+          </>
         )}
-        <span style={{ marginLeft:20, fontFamily: 'monospace', fontSize: '1.2em' }}>
-          Time Left: {Math.floor(timeLeft/60)}:
-          {(timeLeft%60).toString().padStart(2,'0')}
-        </span>
       </div>
 
-      <div style={{ display:'flex', marginTop:20 }}>
-        <div style={{ 
-          flex:1, 
-          marginRight:10, 
-          height:400, 
-          overflowY:'auto', 
-          border:'1px solid #ccc', 
-          padding:10,
-          borderRadius: '4px',
-          backgroundColor: '#000000',
-          color: '#ffffff'
-        }}>
-          {log.map((e,i) => (
-            <div key={i} style={{
-              marginBottom: '10px',
-              padding: '8px',
-              backgroundColor: e.who === 'bot' ? '#333333' : '#1a1a1a',
-              borderRadius: '4px',
-              color: '#ffffff'
-            }}>
-              <strong style={{ color: e.who === 'bot' ? '#4CAF50' : '#2196F3' }}>{e.who === 'bot' ? '🤖 Bot' : '👤 You'}:</strong> {e.txt}
-            </div>
-          ))}
-        </div>
-        <div style={{ flex:1, height:400 }}>
-          <Editor
-            height="100%"
-            defaultLanguage="javascript"
-            defaultValue={`// Write your code here\n`}
-            theme="vs-dark"
-            options={{
-              minimap: { enabled: false },
-              fontSize: 14,
-              lineNumbers: 'on',
-              automaticLayout: true
-            }}
-          />
-        </div>
+      <div className="mt-5 h-[400px] overflow-y-auto border border-gray-300 rounded-md p-4 bg-black text-white">
+        {log.map((e,i) => (
+          <div 
+            key={i} 
+            className={`
+              mb-3 p-2 rounded-md
+              ${e.who === 'bot' 
+                ? 'bg-gray-800' 
+                : 'bg-gray-900'
+              }
+            `}
+          >
+            <strong className={e.who === 'bot' ? 'text-green-500' : 'text-blue-400'}>
+              {e.who === 'bot' ? '🤖 Bot' : '👤 You'}:
+            </strong>{' '}
+            {e.txt}
+          </div>
+        ))}
       </div>
     </div>
   );
