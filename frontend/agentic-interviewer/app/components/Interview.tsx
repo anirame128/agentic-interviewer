@@ -63,7 +63,7 @@ export default function Interview() {
         audioStream.current.getTracks().forEach(track => track.stop());
       }
     };
-  }, []);
+  }, [recording]);
 
   const startInterview = async () => {
     console.log('[Frontend] → startInterview() called');
