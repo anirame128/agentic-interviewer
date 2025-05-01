@@ -3,20 +3,28 @@
 import { useEffect, useRef, useState } from 'react';
 import io from 'socket.io-client';
 import { SpeechRecognition } from '../types/speech';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import CodeEditor from '../components/CodeEditor';
 import PermissionStatus from '../components/PermissionStatus';
 import TurnStatus from '../components/TurnStatus';
 import ControlButtons from '../components/ControlButtons';
 import ConfirmationDialog from '../components/ConfirmationDialog';
+import Timer from '../components/Timer';
+import PageLayout from '../components/PageLayout';
+import LoadingSpinner from '../components/LoadingSpinner';
 
 export default function Interview() {
   const router = useRouter();
+  const params = useSearchParams();
+  const timerParam = params.get('timer');
+  const interviewSeconds = timerParam ? Number(timerParam) : 30 * 60; // fallback 30 min
+
   const [listening, setListening] = useState(false);
   const [botSpeaking, setBotSpeakingState] = useState(false);
   const [permissionGranted, setPermissionGranted] = useState(false);
   const [interviewActive, setInterviewActive] = useState(false);
   const [showConfirmation, setShowConfirmation] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
   const botSpeakingRef = useRef(false);
   const recogRef = useRef<SpeechRecognition | null>(null);
   const socketRef = useRef<ReturnType<typeof io> | null>(null);
@@ -72,6 +80,8 @@ export default function Interview() {
       } catch (err) {
         console.error('Permission denied:', err);
         setPermissionGranted(false);
+      } finally {
+        setIsLoading(false);
       }
     };
     requestPermissions();
@@ -93,31 +103,40 @@ export default function Interview() {
       return;
     }
 
-    // 1) Clean up any previous socket
-    if (socketRef.current) {
-      socketRef.current.removeAllListeners();
-      socketRef.current.disconnect();
-      socketRef.current = null;
+    setIsLoading(true);
+
+    try {
+      // 1) Clean up any previous socket
+      if (socketRef.current) {
+        socketRef.current.removeAllListeners();
+        socketRef.current.disconnect();
+        socketRef.current = null;
+      }
+
+      // 2) Create a fresh connection
+      socketRef.current = io('http://localhost:4000', { autoConnect: true });
+
+      // 3) Re-bind your handlers
+      socketRef.current.on('botText', txt => {
+        console.log('Bot text:', txt);
+      });
+      socketRef.current.on('botAudio', b64 => playAudio(b64));
+      socketRef.current.on('userText', txt => console.log('User text:', txt));
+      socketRef.current.on('error', msg => {
+        alert(msg);
+        stopListening();
+      });
+
+      // 4) Kick off the interview
+      setInterviewActive(true);
+      socketRef.current.emit('startInterview');
+      startListening();
+    } catch (error) {
+      console.error('Failed to start interview:', error);
+      alert('Failed to start interview. Please try again.');
+    } finally {
+      setIsLoading(false);
     }
-
-    // 2) Create a fresh connection
-    socketRef.current = io('http://localhost:4000', { autoConnect: true });
-
-    // 3) Re-bind your handlers
-    socketRef.current.on('botText', txt => {
-      console.log('Bot text:', txt);
-    });
-    socketRef.current.on('botAudio', b64 => playAudio(b64));
-    socketRef.current.on('userText', txt => console.log('User text:', txt));
-    socketRef.current.on('error', msg => {
-      alert(msg);
-      stopListening();
-    });
-
-    // 4) Kick off the interview
-    setInterviewActive(true);
-    socketRef.current.emit('startInterview');
-    startListening();
   };
 
   const handleEndInterview = () => {
@@ -125,6 +144,8 @@ export default function Interview() {
   };
 
   const confirmEndInterview = () => {
+    setIsLoading(true);
+
     // Stop the currently playing interview audio
     if (audioRef.current) {
       audioRef.current.pause();
@@ -178,29 +199,64 @@ export default function Interview() {
     audio.play().catch(console.error);
   }
 
+  const handleAutoEnd = () => {
+    if (interviewActive) {
+      handleEndInterview();
+    }
+  };
+
+  if (isLoading) {
+    return (
+      <PageLayout title="AI Mock Interview">
+        <LoadingSpinner />
+      </PageLayout>
+    );
+  }
+
   return (
-    <div className="min-h-screen bg-gradient-to-b from-gray-900 to-gray-800">
-      <div className="max-w-4xl mx-auto px-4 py-8">
-        <div className="text-center mb-12">
-          <h1 className="text-4xl font-bold text-white mb-4">AI Mock Interview</h1>
-          <p className="text-gray-400">Practice your technical interview skills with AI</p>
-        </div>
+    <PageLayout
+      title="AI Mock Interview"
+      subtitle="Practice your technical interview skills with AI"
+      maxWidth="4xl"
+    >
+      <div className="space-y-8 animate-fade-in">
+        {interviewActive && (
+          <div className="flex justify-end mb-4">
+            <Timer
+              initialSeconds={interviewSeconds}
+              onComplete={handleAutoEnd}
+              variant="large"
+            />
+          </div>
+        )}
         
         <PermissionStatus permissionGranted={permissionGranted} />
-        <TurnStatus isActive={interviewActive} botSpeaking={botSpeaking} turnStatus={turnStatus} />
-        <ControlButtons
-          interviewActive={interviewActive}
-          permissionGranted={permissionGranted}
-          onStartInterview={startInterview}
-          onEndInterview={handleEndInterview}
-        />
-        <CodeEditor isVisible={interviewActive} />
+        
+        <div className="space-y-4">
+          <TurnStatus
+            isActive={interviewActive}
+            botSpeaking={botSpeaking}
+            turnStatus={turnStatus}
+          />
+          
+          <ControlButtons
+            interviewActive={interviewActive}
+            permissionGranted={permissionGranted}
+            onStartInterview={startInterview}
+            onEndInterview={handleEndInterview}
+          />
+        </div>
+
+        <div className="mt-8">
+          <CodeEditor isVisible={interviewActive} />
+        </div>
+
         <ConfirmationDialog
           isOpen={showConfirmation}
           onConfirm={confirmEndInterview}
           onCancel={cancelEndInterview}
         />
       </div>
-    </div>
+    </PageLayout>
   );
 } 
