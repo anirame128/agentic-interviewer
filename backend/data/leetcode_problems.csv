@@ -1,5 +1,5 @@
 title,slug,url,difficulty,acceptance_rate,prompt,examples,tags
-Find Product Recommendation Pairs,find-product-recommendation-pairs,https://leetcode.com/problems/find-product-recommendation-pairs/,2,66.07,,,
+Find Product Recommendation Pairs,find-product-recommendation-pairs,https://leetcode.com/problems/find-product-recommendation-pairs/description ,2,66.07,,,
 Minimum Threshold for Inversion Pairs Count,minimum-threshold-for-inversion-pairs-count,https://leetcode.com/problems/minimum-threshold-for-inversion-pairs-count/,2,54.97,,,
 Range XOR Queries with Subarray Reversals,range-xor-queries-with-subarray-reversals,https://leetcode.com/problems/range-xor-queries-with-subarray-reversals/,3,50.62,,,
 Make a Positive Array,make-a-positive-array,https://leetcode.com/problems/make-a-positive-array/,2,38.63,,,

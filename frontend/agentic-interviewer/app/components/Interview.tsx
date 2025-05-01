@@ -8,6 +8,94 @@ interface LogEntry {
   txt: string;
 }
 
+// SpeechRecognition types
+interface SpeechRecognitionEvent extends Event {
+  resultIndex: number;
+  results: SpeechRecognitionResultList;
+}
+
+interface SpeechRecognitionError extends Event {
+  error: string;
+  message: string;
+}
+
+interface SpeechRecognitionResultList {
+  length: number;
+  item(index: number): SpeechRecognitionResult;
+  [index: number]: SpeechRecognitionResult;
+}
+
+interface SpeechRecognitionResult {
+  isFinal: boolean;
+  length: number;
+  item(index: number): SpeechRecognitionAlternative;
+  [index: number]: SpeechRecognitionAlternative;
+}
+
+interface SpeechRecognitionAlternative {
+  transcript: string;
+  confidence: number;
+}
+
+interface SpeechRecognition extends EventTarget {
+  continuous: boolean;
+  interimResults: boolean;
+  lang: string;
+  start(): void;
+  stop(): void;
+  abort(): void;
+  onresult: ((this: SpeechRecognition, ev: SpeechRecognitionEvent) => void) | null;
+  onerror: ((this: SpeechRecognition, ev: SpeechRecognitionError) => void) | null;
+  onend: ((this: SpeechRecognition, ev: Event) => void) | null;
+  onstart: ((this: SpeechRecognition, ev: Event) => void) | null;
+}
+
+interface SpeechSynthesisUtterance extends EventTarget {
+  text: string;
+  lang: string;
+  pitch: number;
+  rate: number;
+  volume: number;
+  voice: SpeechSynthesisVoice | null;
+  onstart: ((this: SpeechSynthesisUtterance, ev: Event) => void) | null;
+  onend: ((this: SpeechSynthesisUtterance, ev: Event) => void) | null;
+  onerror: ((this: SpeechSynthesisUtterance, ev: Event) => void) | null;
+}
+
+interface SpeechSynthesisVoice {
+  voiceURI: string;
+  name: string;
+  lang: string;
+  localService: boolean;
+  default: boolean;
+}
+
+interface SpeechSynthesis extends EventTarget {
+  speaking: boolean;
+  pending: boolean;
+  paused: boolean;
+  speak(utterance: SpeechSynthesisUtterance): void;
+  cancel(): void;
+  pause(): void;
+  resume(): void;
+  getVoices(): SpeechSynthesisVoice[];
+}
+
+declare global {
+  interface Window {
+    SpeechRecognition: {
+      new (): SpeechRecognition;
+    };
+    webkitSpeechRecognition: {
+      new (): SpeechRecognition;
+    };
+    SpeechSynthesisUtterance: {
+      new (text?: string): SpeechSynthesisUtterance;
+    };
+    speechSynthesis: SpeechSynthesis;
+  }
+}
+
 // Create socket instance outside component
 const socket = io('http://localhost:4000', {
   autoConnect: false
@@ -17,188 +105,142 @@ export default function Interview() {
   console.log('[Frontend] Interview component rendering');
   
   const [log, setLog] = useState<LogEntry[]>([]);
-  const [recording, setRecording] = useState(false);
-  const mediaRecorder = useRef<MediaRecorder | null>(null);
-  const chunks = useRef<Blob[]>([]);
-  const audioStream = useRef<MediaStream | null>(null);
+  const [listening, setListening] = useState(false);
+  const [botSpeaking, setBotSpeakingState] = useState(false);
+  const botSpeakingRef = useRef(false);
+  const recogRef = useRef<SpeechRecognition | null>(null);
   const socketInitialized = useRef(false);
 
-  // Socket connection effect
+  // Mirror state to ref
+  const setBotSpeaking = (val: boolean) => {
+    botSpeakingRef.current = val;
+    setBotSpeakingState(val);
+  };
+
+  // derive a little human-friendly "turn" status
+  const turnStatus = botSpeaking
+    ? '🤖 Interviewer speaking… please wait'
+    : listening
+      ? '🎤 Your turn—please speak now'
+      : '⏳ Ready…';
+
+  // Initialize socket only once
   useEffect(() => {
-    if (!socketInitialized.current) {
-      console.log('[Frontend] Initializing socket connection');
-      socketInitialized.current = true;
+    if (socketInitialized.current) return;
+    socketInitialized.current = true;
+    socket.connect();
 
-      socket.connect();
+    socket.on('botText', txt => {
+      setLog(prev => [...prev, { who: 'bot', txt }]);
+    });
 
-      socket.on('connect', () => {
-        console.log('[Frontend] Socket connected');
-      });
+    socket.on('botAudio', (b64: string) => {
+      playAudio(b64);
+    });
 
-      socket.on('botText', (txt: string) => {
-        console.log('[Frontend] ← Received bot text:', txt);
-        setLog(prev => [...prev, { who:'bot', txt }]);
-      });
+    socket.on('userText', txt => setLog(prev => [...prev, { who: 'you', txt }]));
+    socket.on('error', msg => {
+      alert(msg);
+      stopListening();
+    });
+  }, []);
 
-      socket.on('userText', (txt: string) => {
-        console.log('[Frontend] ← Received user text:', txt);
-        setLog(prev => [...prev, { who:'you', txt }]);
-      });
+  // Setup SpeechRecognition
+  useEffect(() => {
+    const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SpeechRec) return;
+    const recog = new SpeechRec();
+    recog.continuous = true;
+    recog.interimResults = false;
+    recog.lang = 'en-US';
 
-      socket.on('botAudio', (base64: string) => {
-        console.log('[Frontend] ← Received audio data, length:', base64.length);
-        playAudio(base64);
-      });
-
-      socket.on('error', (msg: string) => {
-        console.error('[Frontend] Socket error:', msg);
-        alert(msg);
-        if (recording) onStopClick();
-      });
-    }
-
-    return () => {
-      console.log('[Frontend] Socket effect cleanup');
-      if (audioStream.current) {
-        audioStream.current.getTracks().forEach(track => track.stop());
+    recog.onstart = () => setListening(true);
+    recog.onend = () => setListening(false);
+    recog.onerror = e => {
+      if (e.error !== 'aborted') stopListening();
+    };
+    recog.onresult = evt => {
+      if (botSpeakingRef.current) return; // ignore during bot speech
+      for (let i = evt.resultIndex; i < evt.results.length; i++) {
+        if (evt.results[i].isFinal) {
+          const text = evt.results[i][0].transcript.trim();
+          socket.emit('userText', text);
+        }
       }
     };
-  }, [recording]);
 
-  const startInterview = async () => {
-    console.log('[Frontend] → startInterview() called');
-    try {
-      console.log('[Frontend] Requesting microphone access...');
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          echoCancellation: true,
-          noiseSuppression: true,
-        }
-      });
-      console.log('[Frontend] Microphone access granted with echo cancellation and noise suppression');
-      audioStream.current = stream;
-      
-      mediaRecorder.current = new MediaRecorder(stream, { mimeType:'audio/webm' });
-      console.log('[Frontend] MediaRecorder created');
-      
-      // Reset chunks array
-      chunks.current = [];
-      
-      mediaRecorder.current.ondataavailable = (e: BlobEvent) => {
-        if (e.data.size > 0) {
-          console.log('[Frontend] Adding chunk of size:', e.data.size);
-          chunks.current.push(e.data);
-        }
-      };
-      
-      mediaRecorder.current.onstop = async () => {
-        console.log('[Frontend] MediaRecorder stopped, sending complete audio');
-        // Build one complete WebM file from all chunks
-        const blob = new Blob(chunks.current, { type: 'audio/webm' });
-        chunks.current = []; // Clear chunks array
-        const base64 = await blobToBase64(blob);
-        console.log('[Frontend] Sending complete audio blob, size:', blob.size);
-        socket.emit('audioBlob', { audioBase64: base64 });
-      };
-      
-      console.log('[Frontend] Starting MediaRecorder');
-      mediaRecorder.current.start();
-      
-      console.log('[Frontend] Setting recording state to true');
-      setRecording(true);
-      
-      console.log('[Frontend] → Emitting startInterview');
-      socket.emit('startInterview');
-    } catch (error) {
-      console.error('[Frontend] Error in startInterview:', error);
-    }
+    recogRef.current = recog;
+  }, []);
+
+  const startListening = () => {
+    if (listening || botSpeakingRef.current || window.speechSynthesis.speaking) return;
+    try { recogRef.current?.start(); } catch {};
   };
 
-  function playAudio(b64: string) {
-    console.log('[Frontend] Creating audio element');
-    const audio = new Audio('data:audio/mp3;base64,' + b64);
-    
-    audio.onerror = (e) => {
-      console.error('[Frontend] Audio element error:', e);
-    };
+  const stopListening = () => {
+    if (!listening) return;
+    try { recogRef.current?.stop(); } catch {};
+  };
 
-    audio.oncanplaythrough = () => {
-      console.log('[Frontend] Audio can play through, attempting to play...');
-      audio.play().catch(e => console.error('[Frontend] Audio.play() failed:', e));
-    };
+  const startInterview = () => {
+    socket.emit('startInterview');
+    startListening();
+  };
 
-    audio.onplay = () => {
-      console.log('[Frontend] Audio started playing');
-    };
-
+  function playAudio(base64: string) {
+    stopListening();
+    const audio = new Audio('data:audio/mp3;base64,' + base64);
+    audio.onplay = () => setBotSpeaking(true);
     audio.onended = () => {
-      console.log('[Frontend] Audio finished playing');
+      setBotSpeaking(false);
+      startListening();
     };
-  }
-
-  const onStopClick = () => {
-    console.log('[Frontend] Stop button clicked');
-    if (mediaRecorder.current) {
-      mediaRecorder.current.stop();
-    }
-    if (audioStream.current) {
-      audioStream.current.getTracks().forEach(track => track.stop());
-    }
-    setRecording(false);
-  };
-
-  const sendResponse = () => {
-    console.log('[Frontend] Send Response button clicked');
-    if (mediaRecorder.current) {
-      mediaRecorder.current.stop();
-      // Restart recording immediately
-      mediaRecorder.current.start();
-    }
-  };
-
-  function blobToBase64(blob: Blob): Promise<string> {
-    return new Promise(res => {
-      const reader = new FileReader();
-      reader.onloadend = () => res(reader.result?.toString().split(',')[1] || '');
-      reader.readAsDataURL(blob);
-    });
+    audio.play().catch(console.error);
   }
 
   return (
     <div className="p-5">
       <h1 className="text-2xl font-bold mb-4">AI Mock Interview</h1>
+      
+      {/* 🟡 Turn-taking banner */}
+      <div
+        className={`
+          mb-4 p-3 rounded-md text-white font-medium
+          ${botSpeaking 
+            ? 'bg-gray-600' 
+            : listening 
+              ? 'bg-green-600' 
+              : 'bg-yellow-600'}
+        `}
+      >
+        {turnStatus}
+      </div>
+
       <div className="flex items-center gap-4">
-        <button 
+        <button
           type="button"
           onClick={startInterview}
-          disabled={recording}
+          disabled={botSpeaking || listening}
           className={`
             px-4 py-2 rounded-md text-white font-medium
-            ${recording 
-              ? 'bg-gray-400 cursor-not-allowed' 
+            ${botSpeaking || listening
+              ? 'bg-gray-400 cursor-not-allowed'
               : 'bg-blue-600 hover:bg-blue-700 cursor-pointer'
             }
           `}
         >
-          {recording ? 'Interview in Progress...' : 'Start Interview'}
+          {listening || botSpeaking 
+            ? 'Interview in Progress…' 
+            : 'Start Interview'}
         </button>
-        {recording && (
-          <>
-            <button 
-              type="button"
-              onClick={sendResponse}
-              className="px-4 py-2 rounded-md text-white font-medium bg-green-600 hover:bg-green-700"
-            >
-              Send Response
-            </button>
-            <button 
-              type="button"
-              onClick={onStopClick}
-              className="px-4 py-2 rounded-md text-white font-medium bg-red-600 hover:bg-red-700"
-            >
-              Stop & End
-            </button>
-          </>
+        {listening && (
+          <button 
+            type="button"
+            onClick={stopListening}
+            className="px-4 py-2 rounded-md text-white font-medium bg-red-600 hover:bg-red-700"
+          >
+            Stop & End
+          </button>
         )}
       </div>
 

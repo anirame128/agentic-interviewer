@@ -92,87 +92,161 @@ io.on('connection', socket => {
     }
   });
 
-  // 2) Handle complete audio blob
-  socket.on('audioBlob', async ({ audioBase64 }) => {
+  // 2) Handle audio blob from frontend
+  socket.on('audioUtterance', async ({ audioBase64 }) => {
     try {
-      console.log('[Backend] ← Received audio blob');
+      console.log('[Backend] ← Received audio blob, length:', audioBase64.length);
+      const audioBuffer = Buffer.from(audioBase64, 'base64');
       
-      // STT
-      const form = new FormData();
-      form.append('file', Buffer.from(audioBase64, 'base64'), 'user.webm');
-      form.append('language', 'english');
-      
+      // STT for user audio
       const sttRes = await axios.post(
         'https://api.lemonfox.ai/v1/audio/transcriptions',
-        form,
-        { 
-          headers: { 
-            ...form.getHeaders(),
-            Authorization: `Bearer ${process.env.LEMONFOX_API_KEY}`
+        audioBuffer,
+        {
+          headers: {
+            Authorization: `Bearer ${process.env.LEMONFOX_API_KEY}`,
+            'Content-Type': 'audio/mp3'
           }
         }
       );
-      
-      const userText = sttRes.data.text.trim();
-      if (!userText) {
-        console.log('[Backend] Empty transcription—skipping');
+
+      const text = sttRes.data.text.trim();
+      console.log('[Backend] → Transcribed text:', text);
+
+      // Filter empty/short input
+      if (!text || text.length < 2) return;
+
+      const noiseRe = /^(thank you|hello|hi|okay|um+|ah+)$/i;
+      if (noiseRe.test(text)) {
+        console.log('[Backend] Dropping likely noise input:', text);
         return;
       }
-      
-      console.log('[Backend] → STT result:', userText);
-      socket.emit('userText', userText);
 
-      // Add user's message to history
+      socket.emit('userText', text); // Reflect back to frontend
+
       chatHistories.get(socket.id).push({
         role: 'user',
-        content: userText
+        content: text
       });
 
-      // Chat: ask the LLM for a hint
       const chat = await openai.chat.completions.create({
         model: 'llama-8b-chat',
         messages: chatHistories.get(socket.id),
         temperature: 0.2
       });
-      
+
       const hint = chat.choices[0].message.content.trim();
-      console.log('[Backend] → Generated hint:', hint);
-      
-      // Add assistant's response to history
+      console.log('[Backend] → Generated response:', hint);
+
       chatHistories.get(socket.id).push({
         role: 'assistant',
         content: hint
       });
-      
+
       socket.emit('botText', hint);
       socket.emit('botSpeaking', true);
 
       // TTS for hint
       const ttsRes = await axios.post(
         'https://api.lemonfox.ai/v1/audio/speech',
-        { 
-          input: hint, 
-          voice: 'sarah', 
-          response_format: 'mp3' 
+        {
+          input: hint,
+          voice: 'sarah',
+          response_format: 'mp3'
         },
-        { 
-          headers: { 
-            Authorization: `Bearer ${process.env.LEMONFOX_API_KEY}` 
-          }, 
-          responseType: 'arraybuffer' 
+        {
+          headers: {
+            Authorization: `Bearer ${process.env.LEMONFOX_API_KEY}`
+          },
+          responseType: 'arraybuffer'
         }
       );
+
       const hintB64 = Buffer.from(ttsRes.data, 'binary').toString('base64');
-      console.log('[Backend] → Sending TTS audio for hint');
       socket.emit('botAudio', hintB64);
       socket.emit('botSpeaking', false);
-
-    } catch(err) {
-      console.error('[Backend] Error processing audio blob:', err);
-      socket.emit('error', 'Something went wrong; please try again.');
+    } catch (err) {
+      console.error('[Backend] Error handling audioUtterance:', err);
+      socket.emit('error', 'Something went wrong while processing your audio.');
       socket.emit('botSpeaking', false);
     }
   });
+
+  // 3) Handle direct userText from SpeechRecognition (text only)
+  socket.on('userText', async (text) => {
+    try {
+      console.log('[Backend] ← Received user text:', text);
+
+      // Filter empty/short input
+      if (!text || text.length < 2) return;
+      const noiseRe = /^(thank you|hello|hi|okay|um+|ah+)$/i;
+      if (noiseRe.test(text)) {
+        console.log('[Backend] Dropping likely noise input:', text);
+        return;
+      }
+
+      // Get the last message from chat history
+      const chatHistory = chatHistories.get(socket.id);
+      const lastMessage = chatHistory[chatHistory.length - 1];
+
+      // If the last message was from the assistant and matches the current text,
+      // it means we're receiving an echo of our own message - ignore it
+      if (lastMessage && lastMessage.role === 'assistant' && lastMessage.content === text) {
+        console.log('[Backend] Ignoring echo of bot message');
+        return;
+      }
+
+      // Reflect back to frontend UI
+      socket.emit('userText', text);
+
+      // Append to chat history
+      chatHistories.get(socket.id).push({
+        role: 'user',
+        content: text
+      });
+
+      // Ask the LLM
+      const chat = await openai.chat.completions.create({
+        model: 'llama-8b-chat',
+        messages: chatHistories.get(socket.id),
+        temperature: 0.2
+      });
+      const reply = chat.choices[0].message.content.trim();
+      console.log('[Backend] → Generated response:', reply);
+
+      // Save & emit bot response
+      chatHistories.get(socket.id).push({
+        role: 'assistant',
+        content: reply
+      });
+      socket.emit('botText', reply);
+      socket.emit('botSpeaking', true);
+
+      // TTS back to client
+      const ttsRes = await axios.post(
+        'https://api.lemonfox.ai/v1/audio/speech',
+        { input: reply, voice: 'sarah', response_format: 'mp3' },
+        {
+          headers: { Authorization: `Bearer ${process.env.LEMONFOX_API_KEY}` },
+          responseType: 'arraybuffer'
+        }
+      );
+      const b64 = Buffer.from(ttsRes.data, 'binary').toString('base64');
+      socket.emit('botAudio', b64);
+      socket.emit('botSpeaking', false);
+    } catch (err) {
+      console.error('[Backend] Error handling userText:', err);
+      socket.emit('error', 'Something went wrong while handling your input.');
+      socket.emit('botSpeaking', false);
+    }
+  });
+
+  // Helper function to validate WebM header
+  function isValidWebM(buffer) {
+    // WebM header starts with 0x1A45DFA3
+    const webmHeader = Buffer.from([0x1A, 0x45, 0xDF, 0xA3]);
+    return buffer.slice(0, 4).equals(webmHeader);
+  }
 
   // Clean up chat history when socket disconnects
   socket.on('disconnect', () => {
