@@ -4,6 +4,11 @@ import { useEffect, useRef, useState } from 'react';
 import io from 'socket.io-client';
 import { SpeechRecognition } from '../types/speech';
 import { useRouter } from 'next/navigation';
+import CodeEditor from '../components/CodeEditor';
+import PermissionStatus from '../components/PermissionStatus';
+import TurnStatus from '../components/TurnStatus';
+import ControlButtons from '../components/ControlButtons';
+import ConfirmationDialog from '../components/ConfirmationDialog';
 
 export default function Interview() {
   const router = useRouter();
@@ -181,107 +186,20 @@ export default function Interview() {
           <p className="text-gray-400">Practice your technical interview skills with AI</p>
         </div>
         
-        {/* Permission status */}
-        {!permissionGranted && (
-          <div className="mb-8 p-4 bg-yellow-900/30 rounded-xl text-yellow-200 border border-yellow-800/50 backdrop-blur-sm animate-pulse">
-            <div className="flex items-center justify-center gap-2">
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-              </svg>
-              Please grant microphone permissions to start the interview
-            </div>
-          </div>
-        )}
-        
-        {/* Turn-taking banner - only show during active interview */}
-        {interviewActive && turnStatus && (
-          <div
-            className={`
-              mb-8 p-6 rounded-xl text-white font-medium shadow-lg
-              transition-all duration-300 transform
-              ${botSpeaking 
-                ? 'bg-gray-700/50 backdrop-blur-sm' 
-                : 'bg-green-600/80 backdrop-blur-sm'}
-            `}
-          >
-            <div className="flex items-center justify-center gap-3 text-lg">
-              {botSpeaking ? (
-                <div className="flex items-center gap-2">
-                  <div className="w-2 h-2 bg-white rounded-full animate-pulse" />
-                  <div className="w-2 h-2 bg-white rounded-full animate-pulse" style={{ animationDelay: '0.2s' }} />
-                  <div className="w-2 h-2 bg-white rounded-full animate-pulse" style={{ animationDelay: '0.4s' }} />
-                </div>
-              ) : null}
-              {turnStatus}
-            </div>
-          </div>
-        )}
-
-        {/* Control buttons */}
-        <div className="flex items-center justify-center gap-6 mb-8">
-          {!interviewActive ? (
-            <button
-              type="button"
-              onClick={startInterview}
-              disabled={!permissionGranted}
-              className={`
-                px-8 py-4 rounded-xl text-white font-medium shadow-lg
-                transition-all duration-300 transform hover:scale-105
-                ${!permissionGranted
-                  ? 'bg-gray-600 cursor-not-allowed'
-                  : 'bg-blue-600 hover:bg-blue-500 cursor-pointer'}
-              `}
-            >
-              Start Interview
-            </button>
-          ) : (
-            <button 
-              type="button"
-              onClick={handleEndInterview}
-              className="px-8 py-4 rounded-xl text-white font-medium bg-red-600 hover:bg-red-500 shadow-lg transition-all duration-300 transform hover:scale-105"
-            >
-              End Interview
-            </button>
-          )}
-        </div>
-
-        {/* Confirmation Dialog */}
-        {showConfirmation && (
-          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-            <div className="bg-gray-800 p-6 rounded-xl max-w-md w-full mx-4">
-              <h3 className="text-xl font-semibold text-white mb-4">End Interview?</h3>
-              <p className="text-gray-300 mb-6">
-                Are you sure you want to end the interview? You&apos;ll be taken to the feedback page.
-              </p>
-              <div className="flex justify-end gap-4">
-                <button
-                  onClick={cancelEndInterview}
-                  className="px-4 py-2 rounded-lg text-gray-300 hover:text-white transition-colors"
-                >
-                  Cancel
-                </button>
-                <button
-                  onClick={confirmEndInterview}
-                  className="px-4 py-2 rounded-lg bg-red-600 text-white hover:bg-red-500 transition-colors"
-                >
-                  End Interview
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* Interview status */}
-        {interviewActive && (
-          <div className="text-center text-gray-300 mb-8">
-            <div className="flex items-center justify-center gap-2">
-              <svg className="w-5 h-5 animate-pulse" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
-              </svg>
-              Interview in progress... Speak clearly and naturally.
-            </div>
-          </div>
-        )}
+        <PermissionStatus permissionGranted={permissionGranted} />
+        <TurnStatus isActive={interviewActive} botSpeaking={botSpeaking} turnStatus={turnStatus} />
+        <ControlButtons
+          interviewActive={interviewActive}
+          permissionGranted={permissionGranted}
+          onStartInterview={startInterview}
+          onEndInterview={handleEndInterview}
+        />
+        <CodeEditor isVisible={interviewActive} />
+        <ConfirmationDialog
+          isOpen={showConfirmation}
+          onConfirm={confirmEndInterview}
+          onCancel={cancelEndInterview}
+        />
       </div>
     </div>
   );
