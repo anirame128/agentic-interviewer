@@ -70,17 +70,6 @@ interface SpeechSynthesisVoice {
   default: boolean;
 }
 
-interface SpeechSynthesis extends EventTarget {
-  speaking: boolean;
-  pending: boolean;
-  paused: boolean;
-  speak(utterance: SpeechSynthesisUtterance): void;
-  cancel(): void;
-  pause(): void;
-  resume(): void;
-  getVoices(): SpeechSynthesisVoice[];
-}
-
 declare global {
   interface Window {
     SpeechRecognition: {
@@ -92,7 +81,6 @@ declare global {
     SpeechSynthesisUtterance: {
       new (text?: string): SpeechSynthesisUtterance;
     };
-    speechSynthesis: SpeechSynthesis;
   }
 }
 
