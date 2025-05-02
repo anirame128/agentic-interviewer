@@ -1,44 +1,50 @@
-'use client';
+"use client";
 
-import { useEffect, useRef, useState } from 'react';
-import io from 'socket.io-client';
-import { SpeechRecognition } from '../types/speech';
-import { useRouter, useSearchParams } from 'next/navigation';
-import CodeEditor from '../components/CodeEditor';
-import PermissionStatus from '../components/PermissionStatus';
-import TurnStatus from '../components/TurnStatus';
-import ControlButtons from '../components/ControlButtons';
-import ConfirmationDialog from '../components/ConfirmationDialog';
-import Timer from '../components/Timer';
-import PageLayout from '../components/PageLayout';
-import LoadingSpinner from '../components/LoadingSpinner';
-import * as monaco from 'monaco-editor';
+import type { OnMount } from "@monaco-editor/react";
+
+import { useEffect, useRef, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { Button } from "@heroui/button";
+import { Card, CardHeader, CardBody } from "@heroui/react";
+import { io, Socket } from "socket.io-client";
+import { Copy, RefreshCw, Mic, MicOff } from "lucide-react";
+
+import { SpeechRecognition } from "@/types/speech";
+import Timer from "@/components/timer";
+import CodeEditor from "@/components/CodeEditor";
+
 
 const PAUSE_THRESHOLD_MS = 5000;
 
 export default function Interview() {
   const router = useRouter();
   const params = useSearchParams();
-  const timerParam = params.get('timer');
+  const timerParam = params.get("timer");
   const interviewSeconds = timerParam ? Number(timerParam) : 30 * 60; // fallback 30 min
+  const [timerKey, setTimerKey] = useState(0);
   const timerSecondsRef = useRef(interviewSeconds);
   const onTimerCompleteRef = useRef<(() => void) | null>(null);
 
   const [listening, setListening] = useState(false);
   const [botSpeaking, setBotSpeakingState] = useState(false);
   const [permissionGranted, setPermissionGranted] = useState(false);
+  const [permissionError, setPermissionError] = useState<string | null>(null);
   const [interviewActive, setInterviewActive] = useState(false);
   const [showConfirmation, setShowConfirmation] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const botSpeakingRef = useRef(false);
   const recogRef = useRef<SpeechRecognition | null>(null);
-  const socketRef = useRef<ReturnType<typeof io> | null>(null);
+  const socketRef = useRef<Socket | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const pauseTimeoutRef = useRef<number | null>(null);
-  const countdownIntervalRef = useRef<number | null>(null);
-  const expiryTimestampRef = useRef<number>(0);
+  const editorRef = useRef<any>(null);
+  const [connecting, setConnecting] = useState(false);
+  const [code, setCode] = useState("// Start coding here...\n");
+  const [chat, setChat] = useState<{ sender: "bot" | "user"; text: string }[]>([]);
+
+  // split speech vs code
   const speechBufferRef = useRef<string>("");
-  const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
+  const mediaStreamRef = useRef<MediaStream | null>(null);
 
   // Mirror state to ref
   const setBotSpeaking = (val: boolean) => {
@@ -46,108 +52,101 @@ export default function Interview() {
     setBotSpeakingState(val);
   };
 
+  const setMicEnabled = (on: boolean) => {
+    mediaStreamRef.current
+      ?.getAudioTracks()
+      .forEach(track => (track.enabled = on));
+  };
+
+  // Effect to handle mic muting during bot speech
+  useEffect(() => {
+    setMicEnabled(!botSpeaking);
+    if (botSpeaking) {
+      flushSpeechBuffer(); // end any pending user turn
+    }
+  }, [botSpeaking]);
+
   // derive a little human-friendly "turn" status
   const turnStatus = botSpeaking
-    ? '🤖 Interviewer speaking… please wait'
+    ? "🤖 Interviewer speaking… please wait"
     : listening
-      ? '🎤 Your turn—please speak now'
-      : '';
+      ? "🎤 Your turn—please speak now"
+      : "";
 
-  // Flush helper (clears countdown too)
+  // --- Speech Buffer Logic ---
   const flushSpeechBuffer = () => {
-    console.log("[SpeechBuffer] 🔥 flush:", speechBufferRef.current);
+    if (!speechBufferRef.current.trim()) return;
+    console.log('[SpeechBuffer] flushing=', speechBufferRef.current);
     if (pauseTimeoutRef.current) {
       clearTimeout(pauseTimeoutRef.current);
       pauseTimeoutRef.current = null;
     }
-    if (countdownIntervalRef.current) {
-      clearInterval(countdownIntervalRef.current);
-      countdownIntervalRef.current = null;
-    }
-
     const txt = speechBufferRef.current.trim();
-    if (txt) socketRef.current?.emit('userText', txt);
+    if (txt) socketRef.current?.emit("userText", txt);
     speechBufferRef.current = "";
   };
 
-  // Starts or restarts both the debounce timer AND the countdown logger
-  const scheduleFlush = () => {
-    // 1) clear any existing flush timer
+  const scheduleSpeechFlush = () => {
     if (pauseTimeoutRef.current) {
       clearTimeout(pauseTimeoutRef.current);
     }
-    // 2) set the new expiry timestamp
-    expiryTimestampRef.current = Date.now() + PAUSE_THRESHOLD_MS;
-    // 3) start (or restart) the countdown logger
-    if (countdownIntervalRef.current) {
-      clearInterval(countdownIntervalRef.current);
-    }
-    countdownIntervalRef.current = window.setInterval(() => {
-      const rem = expiryTimestampRef.current - Date.now();
-      const s = Math.max(0, Math.round(rem / 1000));
-      console.log(`[SpeechBuffer] ⏳ flush in ${s}s`);
-      if (rem <= 0) {
-        clearInterval(countdownIntervalRef.current!);
-        countdownIntervalRef.current = null;
-      }
-    }, 200);
-
-    // 4) schedule the actual flush
-    pauseTimeoutRef.current = window.setTimeout(
-      flushSpeechBuffer,
-      PAUSE_THRESHOLD_MS
-    );
+    pauseTimeoutRef.current = window.setTimeout(flushSpeechBuffer, PAUSE_THRESHOLD_MS);
   };
 
-  // Setup SpeechRecognition
+  // --- SpeechRecognition Setup ---
   useEffect(() => {
     const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SpeechRec) return;
     const recog = new SpeechRec();
     recog.continuous = true;
     recog.interimResults = false;
-    recog.lang = 'en-US';
-
+    recog.lang = "en-US";
     recog.onstart = () => setListening(true);
     recog.onend = () => setListening(false);
-    recog.onerror = e => {
-      if (e.error !== 'aborted') stopListening();
+    recog.onerror = (e) => {
+      if (e.error !== "aborted") stopListening();
     };
-    recog.onresult = evt => {
-      if (botSpeakingRef.current) return; // ignore during bot speech
+    recog.onresult = (evt) => {
+      if (botSpeakingRef.current) return;
+      let transcript = "";
       for (let i = evt.resultIndex; i < evt.results.length; i++) {
         if (evt.results[i].isFinal) {
-          // 1) accumulate
-          const part = evt.results[i][0].transcript.trim();
-          speechBufferRef.current += (speechBufferRef.current ? " " : "") + part;
-          // 2) restart debounce
-          scheduleFlush();
+          transcript += evt.results[i][0].transcript.trim() + " ";
         }
       }
+      if (transcript) {
+        speechBufferRef.current += transcript;
+        scheduleSpeechFlush();
+      }
     };
-
     recogRef.current = recog;
   }, []);
 
-  // Hook up editor keystrokes to also reset the debounce
+  // --- Microphone Control ---
   useEffect(() => {
-    if (!editorRef.current) return;
-    const disposable = editorRef.current.onDidChangeModelContent(() => {
-      scheduleFlush();
-    });
-    return () => disposable.dispose();
-  }, [editorRef.current]);
+    if (botSpeaking) {
+      // Always stop mic immediately when bot is speaking
+      if (listening) stopListening();
+    } else if (!botSpeaking && interviewActive && permissionGranted) {
+      // Only start mic when bot is not speaking, interview is active, and permission is granted
+      if (!listening) startListening();
+    }
+  }, [botSpeaking, interviewActive, permissionGranted, listening]);
 
   // Request permissions when component mounts
   useEffect(() => {
     const requestPermissions = async () => {
       try {
-        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        stream.getTracks().forEach(track => track.stop());
+        const stream = await navigator.mediaDevices.getUserMedia({
+          audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }
+        });
+        mediaStreamRef.current = stream;
         setPermissionGranted(true);
+        setPermissionError(null);
       } catch (err) {
-        console.error('Permission denied:', err);
+        console.error("Permission denied:", err);
         setPermissionGranted(false);
+        setPermissionError(err instanceof Error ? err.message : "Failed to access microphone");
       } finally {
         setIsLoading(false);
       }
@@ -155,58 +154,58 @@ export default function Interview() {
     requestPermissions();
   }, []);
 
+  const requestMicrophonePermission = async () => {
+    setIsLoading(true);
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }
+      });
+      mediaStreamRef.current = stream;
+      setPermissionGranted(true);
+      setPermissionError(null);
+    } catch (err) {
+      console.error("Permission denied:", err);
+      setPermissionGranted(false);
+      setPermissionError(err instanceof Error ? err.message : "Failed to access microphone");
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   const startListening = () => {
-    if (listening || botSpeakingRef.current || window.speechSynthesis.speaking) return;
-    try { recogRef.current?.start(); } catch {};
+    if (listening || botSpeakingRef.current || window.speechSynthesis.speaking)
+      return;
+    try {
+      recogRef.current?.start();
+      setListening(true);
+    } catch (err) {
+      console.error("Error starting speech recognition:", err);
+      setListening(false);
+    }
   };
 
   const stopListening = () => {
     if (!listening) return;
-    try { recogRef.current?.stop(); } catch {};
+    try {
+      recogRef.current?.stop();
+      setListening(false);
+    } catch (err) {
+      console.error("Error stopping speech recognition:", err);
+    }
   };
 
-  const startInterview = async () => {
-    if (!permissionGranted) {
-      alert('Please grant microphone permissions to start the interview');
-      return;
-    }
+  const startInterview = () => {
+    if (!permissionGranted || interviewActive || connecting) return;
+    setConnecting(true);
+    const socket = socketRef.current!;
 
-    setIsLoading(true);
-
-    try {
-      // 1) Clean up any previous socket
-      if (socketRef.current) {
-        socketRef.current.removeAllListeners();
-        socketRef.current.disconnect();
-        socketRef.current = null;
-      }
-
-      // 2) Create a fresh connection
-      socketRef.current = io('http://localhost:4000', { autoConnect: true });
-
-      // 3) Re-bind your handlers
-      socketRef.current.on('botText', txt => {
-        console.log('Bot text:', txt);
-      });
-      socketRef.current.on('botAudio', b64 => playAudio(b64));
-      socketRef.current.on('userText', txt => console.log('User text:', txt));
-      socketRef.current.on('error', msg => {
-        alert(msg);
-        stopListening();
-      });
-
-      // 4) Kick off the interview
+    console.log('[Socket] Starting interview with new connection');
+    socket.connect();
+    socket.once("connect", () => {
+      setConnecting(false);
       setInterviewActive(true);
-      socketRef.current.emit('startInterview');
-      
-      // Don't start listening immediately - wait for bot's first message
-      // The playAudio function will start listening after the bot finishes speaking
-    } catch (error) {
-      console.error('Failed to start interview:', error);
-      alert('Failed to start interview. Please try again.');
-    } finally {
-      setIsLoading(false);
-    }
+      socket.emit("startInterview");
+    });
   };
 
   const handleEndInterview = () => {
@@ -214,6 +213,7 @@ export default function Interview() {
   };
 
   const confirmEndInterview = () => {
+    console.log('confirmEndInterview called');
     setIsLoading(true);
 
     // Stop the currently playing interview audio
@@ -243,29 +243,27 @@ export default function Interview() {
     botSpeakingRef.current = false;
 
     // Navigate to feedback page
-    router.push('/feedback');
+    router.push("/feedback");
   };
 
   const cancelEndInterview = () => {
     setShowConfirmation(false);
-    // Restore the timer state
+    // Clear any pending speech flush
+    if (pauseTimeoutRef.current) {
+      clearTimeout(pauseTimeoutRef.current);
+      pauseTimeoutRef.current = null;
+    }
+    // Restore the timer state and force a reset
     timerSecondsRef.current = interviewSeconds;
+    setTimerKey(k => k + 1);
   };
 
   function playAudio(base64: string) {
-    stopListening();
-    // stop any old audio
-    if (audioRef.current) {
-      audioRef.current.pause();
-      audioRef.current.currentTime = 0;
-    }
-    // create and store new audio
-    const audio = new Audio('data:audio/mp3;base64,' + base64);
+    const audio = new Audio("data:audio/mp3;base64," + base64);
     audioRef.current = audio;
     audio.onplay = () => setBotSpeaking(true);
     audio.onended = () => {
       setBotSpeaking(false);
-      startListening();
       audioRef.current = null;
     };
     audio.play().catch(console.error);
@@ -282,63 +280,293 @@ export default function Interview() {
     onTimerCompleteRef.current = handleAutoEnd;
   }, [handleAutoEnd]);
 
+  // --- Code Editor: emit code changes immediately, don't touch speech buffer ---
+  const handleEditorMount: OnMount = (editor) => {
+    editorRef.current = editor;
+    editor.onDidChangeModelContent(() => {
+      socketRef.current?.emit("userCode", editor.getValue());
+    });
+  };
+
+  useEffect(() => {
+    const socket = io(process.env.NEXT_PUBLIC_SOCKET_URL || "http://localhost:4000", {
+      autoConnect: false,              // don't try to connect until we explicitly call .connect()
+      transports: ["websocket"],
+      reconnection: true,
+      reconnectionAttempts: 5,
+      reconnectionDelay: 1000,
+      reconnectionDelayMax: 5000,
+      timeout: 20000,
+    });
+
+    socket.on('connect', () => {
+      console.log('[Socket] Connected successfully');
+      setIsLoading(false);
+    });
+
+    socket.on('disconnect', (reason) => {
+      console.log('[Socket] Disconnected:', reason);
+      setIsLoading(true);
+      if (reason === 'io server disconnect') {
+        // Server initiated disconnect, try to reconnect
+        socket.connect();
+      }
+    });
+
+    socket.on('reconnect', (attemptNumber) => {
+      console.log('[Socket] Reconnected after', attemptNumber, 'attempts');
+      setIsLoading(false);
+      if (interviewActive) {
+        console.log('[Socket] Restarting interview after reconnect');
+        socket.emit('startInterview');
+      }
+    });
+
+    socket.on('reconnect_attempt', (attemptNumber) => {
+      console.log('[Socket] Reconnection attempt', attemptNumber);
+    });
+
+    socket.on('reconnect_error', (error) => {
+      console.error('[Socket] Reconnection error:', error);
+    });
+
+    socket.on('connect_error', (error) => {
+      console.error('[Socket] Connection error:', error);
+      setIsLoading(true);
+    });
+
+    socket.on("botText", (txt) => {
+      if (txt === '[THINKING]') {
+        setChat(c => [...c, { sender: "bot", text: "..." }]);
+        setBotSpeaking(false);
+      } else if (txt === '[ENCOURAGE]') {
+        setChat(c => [...c, { sender: "bot", text: "Go on." }]);
+        setBotSpeaking(false);
+      } else {
+        setChat(c => [...c, { sender: "bot", text: txt }]);
+        setBotSpeaking(true);
+      }
+    });
+
+    socket.on("botAudio", playAudio);
+    socket.on("error", msg => {
+      console.error('[Socket] Error:', msg);
+      alert(msg);
+    });
+
+    socketRef.current = socket;
+    return () => {
+      console.log('[Socket] Cleaning up socket connection');
+      socket.disconnect();
+    };
+  }, []); // Empty dependency array - socket is created once on mount
+
+  // --- UI helpers ---
+  const handleCopyCode = () => {
+    navigator.clipboard.writeText(code);
+  };
+  const handleResetCode = () => {
+    setCode("// Start coding here...\n");
+  };
+
+  // --- Chat rendering ---
+  const renderChat = () => (
+    <div className="flex flex-col gap-3 max-h-[420px] overflow-y-auto px-1 py-2">
+      {chat.map((msg, i) => (
+        <div
+          key={i}
+          className={`flex ${msg.sender === "user" ? "justify-end" : "justify-start"}`}
+        >
+          <div
+            className={`rounded-xl px-4 py-2 max-w-[80%] text-sm shadow-md ${
+              msg.sender === "user"
+                ? "bg-gradient-to-r from-blue-500 to-purple-500 text-white"
+                : "bg-white/10 text-white"
+            }`}
+          >
+            {msg.text}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+
+  // --- Clean up everything on unmount (or navigate away) ---
+  useEffect(() => {
+    return () => {
+      if (pauseTimeoutRef.current) {
+        clearTimeout(pauseTimeoutRef.current);
+        pauseTimeoutRef.current = null;
+      }
+      recogRef.current?.stop();
+      window.speechSynthesis.cancel();
+      audioRef.current?.pause();
+      socketRef.current?.disconnect();
+      mediaStreamRef.current?.getTracks().forEach((t: MediaStreamTrack) => t.stop());
+    };
+  }, []);
+
+  // --- Main Render ---
   if (isLoading) {
     return (
-      <PageLayout title="AI Mock Interview">
-        <LoadingSpinner />
-      </PageLayout>
+      <div className="min-h-screen bg-black text-white flex items-center justify-center">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-white mx-auto mb-4"></div>
+          <p className="text-white/70">Connecting to server...</p>
+        </div>
+      </div>
     );
   }
 
   return (
-    <PageLayout
-      title="AI Mock Interview"
-      subtitle="Practice your technical interview skills with AI"
-      maxWidth="4xl"
-    >
-      <div className="space-y-8 animate-fade-in">
-        {interviewActive && (
-          <div className="flex justify-end mb-4">
+    <div className="min-h-screen flex flex-col bg-black text-white">
+      {/* Navbar */}
+      <nav className="bg-black/80 backdrop-blur-md border-b border-white/10 px-4 fixed w-full z-50">
+        <div className="max-w-7xl mx-auto flex justify-between items-center h-16">
+          <div className="text-2xl font-bold bg-gradient-to-r from-blue-500 to-purple-500 bg-clip-text text-transparent">
+            Candid
+          </div>
+          <div className="flex items-center space-x-4">
             <Timer
+              key={timerKey}
               initialSeconds={timerSecondsRef.current}
               onComplete={() => onTimerCompleteRef.current?.()}
-              variant="large"
+              variant="small"
             />
           </div>
-        )}
-        
-        <PermissionStatus permissionGranted={permissionGranted} />
-        
-        <div className="space-y-4">
-          <TurnStatus
-            isActive={interviewActive}
-            botSpeaking={botSpeaking}
-            turnStatus={turnStatus}
-          />
-          
-          <ControlButtons
-            interviewActive={interviewActive}
-            permissionGranted={permissionGranted}
-            onStartInterview={startInterview}
-            onEndInterview={handleEndInterview}
-          />
         </div>
+      </nav>
 
-        <div className="mt-8">
-          <CodeEditor
-            isVisible={interviewActive}
-            onMount={(editor) => {
-              editorRef.current = editor;
-            }}
-          />
+      <main className="pt-24 px-4 flex-1 w-full">
+        <div className="max-w-7xl mx-auto grid grid-cols-1 md:grid-cols-2 gap-8 items-start">
+          {/* Code Editor Card */}
+          <Card className="bg-black/80 border border-white/10 shadow-xl rounded-2xl">
+            <CardHeader className="flex flex-row items-center justify-between gap-2 border-b border-white/10 pb-2">
+              <span className="font-semibold text-lg text-white">Code Editor</span>
+              <div className="flex gap-2">
+                <Button
+                  isIconOnly
+                  variant="light"
+                  aria-label="Copy code"
+                  onClick={handleCopyCode}
+                  className="hover:bg-white/10"
+                >
+                  <Copy size={18} />
+                </Button>
+                <Button
+                  isIconOnly
+                  variant="light"
+                  aria-label="Reset code"
+                  onClick={handleResetCode}
+                  className="hover:bg-white/10"
+                >
+                  <RefreshCw size={18} />
+                </Button>
+              </div>
+            </CardHeader>
+            <CardBody className="p-0 h-[500px]">
+              <div className="h-full">
+                <CodeEditor
+                  value={code}
+                  onChange={v => setCode(v ?? "")}
+                  onMount={handleEditorMount}
+                  language="typescript"
+                />
+              </div>
+            </CardBody>
+          </Card>
+
+          {/* Chat/Interview Card */}
+          <Card className="bg-black/80 border border-white/10 shadow-xl rounded-2xl flex flex-col h-[600px]">
+            <CardHeader className="flex flex-row items-center justify-between gap-2 border-b border-white/10 pb-2">
+              <span className="font-semibold text-lg text-white">Interview</span>
+              <div className="flex items-center gap-2">
+                {permissionError ? (
+                  <Button
+                    onClick={requestMicrophonePermission}
+                    className="bg-red-500 hover:bg-red-600 text-white"
+                  >
+                    Grant Microphone Access
+                  </Button>
+                ) : (
+                  <span
+                    className={`flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-medium ${
+                      listening
+                        ? "bg-green-500/20 text-green-400"
+                        : permissionGranted
+                          ? "bg-green-500/20 text-green-400"
+                          : "bg-red-500/20 text-red-400"
+                    }`}
+                  >
+                    {listening ? <Mic size={16} /> : <MicOff size={16} />}
+                    {permissionGranted
+                      ? listening
+                        ? "Listening"
+                        : "Mic Ready"
+                      : "Mic Denied"}
+                  </span>
+                )}
+              </div>
+            </CardHeader>
+            <CardBody className="flex flex-col flex-1 p-0">
+              <div className="flex-1 overflow-y-auto px-4 pt-4 pb-2">
+                {renderChat()}
+              </div>
+              <div className="border-t border-white/10 px-4 py-3 bg-black/70 flex flex-col gap-2">
+                {interviewActive && (
+                  <div className="mb-2 text-white/80 text-sm text-center">
+                    {turnStatus}
+                  </div>
+                )}
+                <div className="flex gap-4 justify-center">
+                  <Button
+                    onClick={startInterview}
+                    disabled={interviewActive || !permissionGranted || connecting}
+                    className="bg-gradient-to-r from-blue-500 to-purple-500 text-white hover:from-blue-600 hover:to-purple-600 transition-all duration-300 shadow-lg"
+                  >
+                    Start Interview
+                  </Button>
+                  <Button
+                    onClick={handleEndInterview}
+                    disabled={!interviewActive}
+                    className="bg-red-600 hover:bg-red-700 text-white transition-all duration-300 shadow-lg"
+                  >
+                    End Interview
+                  </Button>
+                </div>
+              </div>
+            </CardBody>
+          </Card>
         </div>
+      </main>
 
-        <ConfirmationDialog
-          isOpen={showConfirmation}
-          onConfirm={confirmEndInterview}
-          onCancel={cancelEndInterview}
-        />
-      </div>
-    </PageLayout>
+      {/* Confirmation Dialog */}
+      {showConfirmation && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-white/10 backdrop-blur-md p-6 rounded-lg max-w-md w-full">
+            <h2 className="text-xl font-semibold mb-4">End Interview?</h2>
+            <p className="text-gray-300 mb-6">
+              Are you sure you want to end the interview? This action cannot be undone.
+            </p>
+            <div className="flex justify-end space-x-4">
+              <Button
+                variant="ghost"
+                onClick={cancelEndInterview}
+                className="text-white border-white/20 hover:bg-white/10"
+              >
+                Cancel
+              </Button>
+              <Button
+                variant="solid"
+                onClick={confirmEndInterview}
+                className="bg-red-500 hover:bg-red-600"
+              >
+                End Interview
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
   );
-} 
+}
