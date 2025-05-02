@@ -1,13 +1,14 @@
 'use client';
 
 import { useState } from 'react';
-import Editor from '@monaco-editor/react';
+import Editor, { OnMount } from '@monaco-editor/react';
 
 interface CodeEditorProps {
   isVisible: boolean;
+  onMount?: OnMount;
 }
 
-export default function CodeEditor({ isVisible }: CodeEditorProps) {
+export default function CodeEditor({ isVisible, onMount }: CodeEditorProps) {
   const [editorLanguage, setEditorLanguage] = useState('javascript');
 
   if (!isVisible) return null;
@@ -38,6 +39,7 @@ export default function CodeEditor({ isVisible }: CodeEditorProps) {
         language={editorLanguage}
         defaultValue="// Start coding here..."
         theme="vs-dark"
+        onMount={onMount}
         options={{
           minimap: { enabled: false },
           fontSize: 14,

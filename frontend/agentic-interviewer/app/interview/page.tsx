@@ -12,12 +12,17 @@ import ConfirmationDialog from '../components/ConfirmationDialog';
 import Timer from '../components/Timer';
 import PageLayout from '../components/PageLayout';
 import LoadingSpinner from '../components/LoadingSpinner';
+import * as monaco from 'monaco-editor';
+
+const PAUSE_THRESHOLD_MS = 5000;
 
 export default function Interview() {
   const router = useRouter();
   const params = useSearchParams();
   const timerParam = params.get('timer');
   const interviewSeconds = timerParam ? Number(timerParam) : 30 * 60; // fallback 30 min
+  const timerSecondsRef = useRef(interviewSeconds);
+  const onTimerCompleteRef = useRef<(() => void) | null>(null);
 
   const [listening, setListening] = useState(false);
   const [botSpeaking, setBotSpeakingState] = useState(false);
@@ -29,6 +34,11 @@ export default function Interview() {
   const recogRef = useRef<SpeechRecognition | null>(null);
   const socketRef = useRef<ReturnType<typeof io> | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const pauseTimeoutRef = useRef<number | null>(null);
+  const countdownIntervalRef = useRef<number | null>(null);
+  const expiryTimestampRef = useRef<number>(0);
+  const speechBufferRef = useRef<string>("");
+  const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
 
   // Mirror state to ref
   const setBotSpeaking = (val: boolean) => {
@@ -42,6 +52,52 @@ export default function Interview() {
     : listening
       ? '🎤 Your turn—please speak now'
       : '';
+
+  // Flush helper (clears countdown too)
+  const flushSpeechBuffer = () => {
+    console.log("[SpeechBuffer] 🔥 flush:", speechBufferRef.current);
+    if (pauseTimeoutRef.current) {
+      clearTimeout(pauseTimeoutRef.current);
+      pauseTimeoutRef.current = null;
+    }
+    if (countdownIntervalRef.current) {
+      clearInterval(countdownIntervalRef.current);
+      countdownIntervalRef.current = null;
+    }
+
+    const txt = speechBufferRef.current.trim();
+    if (txt) socketRef.current?.emit('userText', txt);
+    speechBufferRef.current = "";
+  };
+
+  // Starts or restarts both the debounce timer AND the countdown logger
+  const scheduleFlush = () => {
+    // 1) clear any existing flush timer
+    if (pauseTimeoutRef.current) {
+      clearTimeout(pauseTimeoutRef.current);
+    }
+    // 2) set the new expiry timestamp
+    expiryTimestampRef.current = Date.now() + PAUSE_THRESHOLD_MS;
+    // 3) start (or restart) the countdown logger
+    if (countdownIntervalRef.current) {
+      clearInterval(countdownIntervalRef.current);
+    }
+    countdownIntervalRef.current = window.setInterval(() => {
+      const rem = expiryTimestampRef.current - Date.now();
+      const s = Math.max(0, Math.round(rem / 1000));
+      console.log(`[SpeechBuffer] ⏳ flush in ${s}s`);
+      if (rem <= 0) {
+        clearInterval(countdownIntervalRef.current!);
+        countdownIntervalRef.current = null;
+      }
+    }, 200);
+
+    // 4) schedule the actual flush
+    pauseTimeoutRef.current = window.setTimeout(
+      flushSpeechBuffer,
+      PAUSE_THRESHOLD_MS
+    );
+  };
 
   // Setup SpeechRecognition
   useEffect(() => {
@@ -61,14 +117,26 @@ export default function Interview() {
       if (botSpeakingRef.current) return; // ignore during bot speech
       for (let i = evt.resultIndex; i < evt.results.length; i++) {
         if (evt.results[i].isFinal) {
-          const text = evt.results[i][0].transcript.trim();
-          socketRef.current?.emit('userText', text);
+          // 1) accumulate
+          const part = evt.results[i][0].transcript.trim();
+          speechBufferRef.current += (speechBufferRef.current ? " " : "") + part;
+          // 2) restart debounce
+          scheduleFlush();
         }
       }
     };
 
     recogRef.current = recog;
   }, []);
+
+  // Hook up editor keystrokes to also reset the debounce
+  useEffect(() => {
+    if (!editorRef.current) return;
+    const disposable = editorRef.current.onDidChangeModelContent(() => {
+      scheduleFlush();
+    });
+    return () => disposable.dispose();
+  }, [editorRef.current]);
 
   // Request permissions when component mounts
   useEffect(() => {
@@ -130,7 +198,9 @@ export default function Interview() {
       // 4) Kick off the interview
       setInterviewActive(true);
       socketRef.current.emit('startInterview');
-      startListening();
+      
+      // Don't start listening immediately - wait for bot's first message
+      // The playAudio function will start listening after the bot finishes speaking
     } catch (error) {
       console.error('Failed to start interview:', error);
       alert('Failed to start interview. Please try again.');
@@ -178,6 +248,8 @@ export default function Interview() {
 
   const cancelEndInterview = () => {
     setShowConfirmation(false);
+    // Restore the timer state
+    timerSecondsRef.current = interviewSeconds;
   };
 
   function playAudio(base64: string) {
@@ -205,6 +277,11 @@ export default function Interview() {
     }
   };
 
+  // Update the ref when handleAutoEnd changes
+  useEffect(() => {
+    onTimerCompleteRef.current = handleAutoEnd;
+  }, [handleAutoEnd]);
+
   if (isLoading) {
     return (
       <PageLayout title="AI Mock Interview">
@@ -223,8 +300,8 @@ export default function Interview() {
         {interviewActive && (
           <div className="flex justify-end mb-4">
             <Timer
-              initialSeconds={interviewSeconds}
-              onComplete={handleAutoEnd}
+              initialSeconds={timerSecondsRef.current}
+              onComplete={() => onTimerCompleteRef.current?.()}
               variant="large"
             />
           </div>
@@ -248,7 +325,12 @@ export default function Interview() {
         </div>
 
         <div className="mt-8">
-          <CodeEditor isVisible={interviewActive} />
+          <CodeEditor
+            isVisible={interviewActive}
+            onMount={(editor) => {
+              editorRef.current = editor;
+            }}
+          />
         </div>
 
         <ConfirmationDialog

@@ -14,10 +14,25 @@ interface TimerProps {
 export default function Timer({ initialSeconds, onComplete, variant = 'small' }: TimerProps) {
   const [secondsLeft, setSecondsLeft] = useState(initialSeconds);
   const intervalRef = useRef<number | undefined>(undefined);
+  const prevInitialSecondsRef = useRef(initialSeconds);
+  const onCompleteRef = useRef(onComplete);
 
-  // Start or restart the countdown whenever initialSeconds changes
+  // Update the ref when onComplete changes
   useEffect(() => {
-    setSecondsLeft(initialSeconds);
+    onCompleteRef.current = onComplete;
+  }, [onComplete]);
+
+  // Only reset the timer if initialSeconds changes significantly
+  useEffect(() => {
+    // If the difference is more than 1 second, consider it a reset
+    if (Math.abs(initialSeconds - prevInitialSecondsRef.current) > 1) {
+      setSecondsLeft(initialSeconds);
+      prevInitialSecondsRef.current = initialSeconds;
+    }
+  }, [initialSeconds]);
+
+  // Start the countdown
+  useEffect(() => {
     if (intervalRef.current) {
       window.clearInterval(intervalRef.current);
     }
@@ -27,7 +42,8 @@ export default function Timer({ initialSeconds, onComplete, variant = 'small' }:
           if (intervalRef.current) {
             window.clearInterval(intervalRef.current);
           }
-          onComplete?.();
+          // Use the ref to call onComplete
+          onCompleteRef.current?.();
           return 0;
         }
         return prev - 1;
@@ -39,7 +55,7 @@ export default function Timer({ initialSeconds, onComplete, variant = 'small' }:
         window.clearInterval(intervalRef.current);
       }
     };
-  }, [initialSeconds, onComplete]);
+  }, []); // Remove onComplete from dependencies
 
   const minutes = Math.floor(secondsLeft / 60).toString().padStart(2, '0');
   const secs = (secondsLeft % 60).toString().padStart(2, '0');
