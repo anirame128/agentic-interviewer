@@ -28,39 +28,30 @@ class WebSocketService {
       // 1) grab a rich problem object
       const problem = interviewService.getRandomProblem();
 
-      // 2) system context hides the details
-      const systemMessage = llmService.createSystemMessage(problem);
+      // 2) initialize conversation with system message and first turn
+      const conversation = llmService.createInitialConversation(problem);
+      this.chatHistories.set(socket.id, conversation);
 
-      // 3) ask the LLM to produce the FIRST interviewer prompt
-      const userKickoff = {
-        role: 'user',
-        content: 'Please begin the interview with your opening prompt.'
-      };
+      // 3) send the first turn to client
+      const firstTurn = conversation[1].content; // Get the first turn from our initial conversation
+      socket.emit('botText', firstTurn);
+      const firstAudioB64 = await audioService.textToSpeech(firstTurn);
+      socket.emit('botAudio', firstAudioB64);
 
-      // 4) get LLM's opening question
-      const opening = await llmService.generateResponse([
-        systemMessage,
-        userKickoff
-      ]);
+      // 4) get LLM's second turn (the problem introduction)
+      const userKickoff = { role: 'user', content: 'Please introduce the problem.' };
+      conversation.push(userKickoff);
+      const opening = await llmService.generateResponse(conversation);
+      conversation.push({ role: 'assistant', content: opening });
 
-      // 5) initialize history with system + assistant
-      this.chatHistories.set(socket.id, [
-        systemMessage,
-        { role: 'assistant', content: opening }
-      ]);
-
-      // 6) send it to client
+      // 5) send second turn to client
       socket.emit('botText', opening);
-      socket.emit('botSpeaking', true);
-
-      const audioB64 = await audioService.textToSpeech(opening);
-      socket.emit('botAudio', audioB64);
-      socket.emit('botSpeaking', false);
+      const secondAudioB64 = await audioService.textToSpeech(opening);
+      socket.emit('botAudio', secondAudioB64);
 
     } catch (err) {
       console.error('[WebSocket] Error starting interview:', err);
       socket.emit('error', 'Failed to start interview. Please try again.');
-      socket.emit('botSpeaking', false);
     }
   }
 
@@ -79,15 +70,11 @@ class WebSocketService {
       this.chatHistories.get(socket.id).push({ role: 'assistant', content: response });
 
       socket.emit('botText', response);
-      socket.emit('botSpeaking', true);
-
       const audioB64 = await audioService.textToSpeech(response);
       socket.emit('botAudio', audioB64);
-      socket.emit('botSpeaking', false);
     } catch (err) {
       console.error('[WebSocket] Error handling audio:', err);
       socket.emit('error', 'Something went wrong while processing your audio.');
-      socket.emit('botSpeaking', false);
     }
   }
 
@@ -109,15 +96,11 @@ class WebSocketService {
       chatHistory.push({ role: 'assistant', content: response });
 
       socket.emit('botText', response);
-      socket.emit('botSpeaking', true);
-
       const audioB64 = await audioService.textToSpeech(response);
       socket.emit('botAudio', audioB64);
-      socket.emit('botSpeaking', false);
     } catch (err) {
       console.error('[WebSocket] Error handling text:', err);
       socket.emit('error', 'Something went wrong while handling your input.');
-      socket.emit('botSpeaking', false);
     }
   }
 }

@@ -33,8 +33,12 @@ export interface SpeechRecognition extends EventTarget {
   start(): void;
   stop(): void;
   abort(): void;
-  onresult: ((this: SpeechRecognition, ev: SpeechRecognitionEvent) => void) | null;
-  onerror: ((this: SpeechRecognition, ev: SpeechRecognitionError) => void) | null;
+  onresult:
+    | ((this: SpeechRecognition, ev: SpeechRecognitionEvent) => void)
+    | null;
+  onerror:
+    | ((this: SpeechRecognition, ev: SpeechRecognitionError) => void)
+    | null;
   onend: ((this: SpeechRecognition, ev: Event) => void) | null;
   onstart: ((this: SpeechRecognition, ev: Event) => void) | null;
 }
@@ -71,4 +75,4 @@ declare global {
       new (text?: string): SpeechSynthesisUtterance;
     };
   }
-} 
+}

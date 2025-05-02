@@ -1,110 +1,203 @@
-'use client';
+"use client";
 
-import { useRouter } from 'next/navigation';
-import { useState } from 'react';
-import PageLayout from './components/PageLayout';
+import { useRouter } from "next/navigation";
+import Link from "next/link";
+import { useState } from "react";
+import {
+  Navbar,
+  NavbarBrand,
+  NavbarContent,
+  NavbarItem,
+  Button,
+  Card,
+  CardHeader,
+  CardBody,
+  Select,
+  SelectItem,
+} from "@heroui/react";
+import { Menu, X, Zap, BarChart, Clock, ChevronRight } from "lucide-react";
+import { motion } from "framer-motion";
 
 export default function Home() {
   const router = useRouter();
-  // default 30 minutes
   const [minutes, setMinutes] = useState(30);
+  const [menuOpen, setMenuOpen] = useState(false);
 
   const handleStart = () => {
-    // navigate with ?timer=seconds so Interview page can read it
     router.push(`/interview?timer=${minutes * 60}`);
   };
 
+  const navLinks = [
+    { label: "Features", href: "/features" },
+    { label: "Pricing", href: "/pricing" },
+  ];
+
   return (
-    <PageLayout
-      title="AI Mock Interview"
-      subtitle="Practice your technical interview skills with an AI interviewer. Get instant feedback and improve your performance."
-    >
-      {/* Timer Selection */}
-      <div className="text-center mb-12 animate-slide-up">
-        <div className="inline-flex items-center space-x-4 bg-gray-800/50 p-4 rounded-xl backdrop-blur-sm">
-          <label className="text-gray-200">Interview Duration:</label>
-          <select
-            value={minutes}
-            onChange={e => setMinutes(Number(e.target.value))}
-            className="bg-gray-700 text-white rounded px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all"
-          >
-            <option value={5}>5 minutes</option>
-            <option value={15}>15 minutes</option>
-            <option value={30}>30 minutes</option>
-            <option value={45}>45 minutes</option>
-            <option value={60}>60 minutes</option>
-            <option value={90}>90 minutes</option>
-            <option value={120}>120 minutes</option>
-          </select>
-        </div>
-        <button
-          onClick={handleStart}
-          className="mt-8 px-8 py-4 bg-blue-600 text-white font-medium rounded-xl shadow-lg hover:bg-blue-500 transition-all duration-300 transform hover:scale-105"
-        >
-          Start Practice Interview
-        </button>
-      </div>
+    <div className="min-h-screen flex flex-col bg-black text-white">
+      {/* Navbar */}
+      <Navbar className="bg-black/80 backdrop-blur-md border-b border-white/10 px-4 fixed w-full z-50">
+        <NavbarBrand>
+          <Link href="/" className="focus:outline-none">
+            <span className="text-2xl font-bold bg-gradient-to-r from-blue-500 to-purple-500 bg-clip-text text-transparent">Candid</span>
+          </Link>
+        </NavbarBrand>
 
-      {/* Features Section */}
-      <div className="grid md:grid-cols-3 gap-8 mb-20">
-        <div className="bg-gray-800/50 p-6 rounded-xl backdrop-blur-sm transform hover:scale-105 transition-all duration-300">
-          <div className="text-blue-400 mb-4">
-            <svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-            </svg>
-          </div>
-          <h3 className="text-xl font-semibold text-white mb-2">Real-time Feedback</h3>
-          <p className="text-gray-400">Get instant feedback on your technical interview performance and areas for improvement.</p>
-        </div>
-
-        <div className="bg-gray-800/50 p-6 rounded-xl backdrop-blur-sm transform hover:scale-105 transition-all duration-300">
-          <div className="text-blue-400 mb-4">
-            <svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253" />
-            </svg>
-          </div>
-          <h3 className="text-xl font-semibold text-white mb-2">Comprehensive Analysis</h3>
-          <p className="text-gray-400">Receive detailed analysis of your problem-solving approach and coding skills.</p>
-        </div>
-
-        <div className="bg-gray-800/50 p-6 rounded-xl backdrop-blur-sm transform hover:scale-105 transition-all duration-300">
-          <div className="text-blue-400 mb-4">
-            <svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
-            </svg>
-          </div>
-          <h3 className="text-xl font-semibold text-white mb-2">Practice Anytime</h3>
-          <p className="text-gray-400">Practice at your own pace, anytime, anywhere. No scheduling required.</p>
-        </div>
-      </div>
-
-      {/* How It Works Section */}
-      <div className="text-center">
-        <h2 className="text-3xl font-bold text-white mb-12">How It Works</h2>
-        <div className="grid md:grid-cols-4 gap-8">
-          {[
-            { step: 1, title: 'Start Interview', desc: 'Click the button to begin your practice interview' },
-            { step: 2, title: 'Answer Questions', desc: 'Speak your answers naturally' },
-            { step: 3, title: 'Get Feedback', desc: 'Receive instant feedback on your performance' },
-            { step: 4, title: 'Improve', desc: 'Use the feedback to enhance your skills' }
-          ].map((item, index) => (
-            <div key={item.step} className="relative">
-              <div className="bg-gray-800/50 p-6 rounded-xl backdrop-blur-sm transform hover:scale-105 transition-all duration-300">
-                <div className="text-2xl font-bold text-blue-400 mb-4">{item.step}</div>
-                <h3 className="text-lg font-semibold text-white mb-2">{item.title}</h3>
-                <p className="text-gray-400">{item.desc}</p>
-              </div>
-              {index < 3 && (
-                <div className="hidden md:block absolute top-1/2 right-0 transform -translate-y-1/2 translate-x-1/2">
-                  <svg className="w-8 h-8 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-                  </svg>
-                </div>
-              )}
-            </div>
+        {/* Desktop Links */}
+        <NavbarContent justify="end" className="hidden md:flex gap-4">
+          {navLinks.map((link) => (
+            <NavbarItem key={link.href}>
+              <Button
+                as="a"
+                href={link.href}
+                variant="light"
+                className="text-white hover:bg-white/10 transition-all duration-300"
+              >
+                {link.label}
+              </Button>
+            </NavbarItem>
           ))}
+          <NavbarItem>
+            <Button
+              onClick={handleStart}
+              variant="solid"
+              className="bg-gradient-to-r from-blue-500 to-purple-500 text-white hover:from-blue-600 hover:to-purple-600 transition-all duration-300 shadow-lg"
+            >
+              Start Interview
+            </Button>
+          </NavbarItem>
+        </NavbarContent>
+
+        {/* Mobile Hamburger */}
+        <NavbarContent className="md:hidden">
+          <NavbarItem>
+            <button
+              onClick={() => setMenuOpen((o) => !o)}
+              className="p-2 focus:outline-none hover:bg-white/10 rounded-lg transition-all duration-300"
+            >
+              {menuOpen ? <X size={24} /> : <Menu size={24} />}
+            </button>
+          </NavbarItem>
+        </NavbarContent>
+      </Navbar>
+
+      {/* Mobile Menu */}
+      {menuOpen && (
+        <motion.div 
+          initial={{ opacity: 0, y: -20 }}
+          animate={{ opacity: 1, y: 0 }}
+          exit={{ opacity: 0, y: -20 }}
+          className="md:hidden bg-black/90 backdrop-blur-md border-b border-white/10 fixed w-full top-16 z-40"
+        >
+          {navLinks.map((link) => (
+            <a
+              key={link.href}
+              href={link.href}
+              className="block px-4 py-3 hover:bg-white/10 transition-all duration-300"
+            >
+              {link.label}
+            </a>
+          ))}
+          <button
+            onClick={handleStart}
+            className="block w-full text-left px-4 py-3 hover:bg-white/10 transition-all duration-300"
+          >
+            Start Interview
+          </button>
+        </motion.div>
+      )}
+
+      {/* Hero */}
+      <main className="flex-grow flex items-center justify-center px-4 py-24 bg-gradient-to-br from-blue-900 via-purple-900 to-black pt-40">
+        <div className="w-full max-w-5xl grid grid-cols-1 md:grid-cols-2 gap-12 items-center">
+          {/* Left: Headline & Description */}
+          <div className="text-center md:text-left">
+            <motion.h1
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.8 }}
+              className="text-5xl md:text-6xl font-extrabold bg-gradient-to-r from-blue-400 to-purple-400 bg-clip-text text-transparent mb-6"
+            >
+              AI Mock Interview
+            </motion.h1>
+            <motion.p
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.2 }}
+              className="text-lg md:text-2xl text-white/70 max-w-xl mb-10"
+            >
+              Practice your technical interview skills with an AI interviewer. Get instant feedback and improve your performance.
+            </motion.p>
+          </div>
+
+          {/* Right: Controls Card */}
+          <motion.div
+            initial={{ opacity: 0, x: 40 }}
+            animate={{ opacity: 1, x: 0 }}
+            transition={{ delay: 0.3 }}
+            className="mx-auto w-full max-w-md"
+          >
+            <div className="bg-black/70 backdrop-blur-md border border-white/20 rounded-2xl shadow-2xl p-8 flex flex-col items-center gap-6">
+              <div className="flex items-center gap-3 mb-2">
+                <Clock size={28} className="text-white/80" />
+                <span className="text-lg font-medium">Duration:</span>
+                <Select
+                  aria-label="Interview Duration"
+                  selectedKeys={new Set([String(minutes)])}
+                  onSelectionChange={(keys) => {
+                    const val = Array.from(keys)[0];
+                    setMinutes(Number(val));
+                  }}
+                  className="bg-black/30 text-white w-32"
+                >
+                  {[5, 15, 30, 45, 60, 90, 120].map((m) => (
+                    <SelectItem key={m} textValue={`${m} minutes`}>
+                      {m} minutes
+                    </SelectItem>
+                  ))}
+                </Select>
+              </div>
+              <Button
+                onClick={handleStart}
+                size="lg"
+                variant="solid"
+                className="bg-gradient-to-r from-blue-500 to-purple-500 text-white hover:from-blue-600 hover:to-purple-600 shadow-lg transform hover:scale-105 transition-all duration-300 px-10 py-6 text-lg w-full"
+              >
+                Start Practice Interview
+                <ChevronRight className="ml-2" />
+              </Button>
+            </div>
+          </motion.div>
         </div>
-      </div>
-    </PageLayout>
+      </main>
+
+      {/* Features */}
+      <section className="w-full max-w-6xl mx-auto grid md:grid-cols-3 gap-8 px-4 py-16">
+        {[
+          { icon: Zap, title: "Real-time Feedback", desc: "Instant guidance on every step." },
+          { icon: BarChart, title: "Comprehensive Analysis", desc: "Deep dive into your problem-solving." },
+          { icon: Clock, title: "Practice Anytime", desc: "Use it whenever you have time." },
+        ].map(({ icon: Icon, title, desc }, index) => (
+          <motion.div
+            key={title}
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: index * 0.2 }}
+            whileHover={{ scale: 1.05 }}
+            className="bg-black/70 backdrop-blur-md border border-white/20 p-6 rounded-2xl shadow-xl flex flex-col items-center text-center hover:border-blue-500/50 transition-all duration-300"
+          >
+            <div className="p-3 bg-gradient-to-r from-blue-500 to-purple-500 rounded-full mb-4">
+              <Icon size={32} className="text-white" />
+            </div>
+            <h3 className="text-xl font-semibold mb-2">{title}</h3>
+            <p className="text-white/70">{desc}</p>
+          </motion.div>
+        ))}
+      </section>
+
+      {/* Footer */}
+      <footer className="bg-black/80 backdrop-blur-md border-t border-white/10 py-6 text-center text-white/60">
+        © {new Date().getFullYear()} Candid. All rights reserved.
+      </footer>
+    </div>
   );
 }
